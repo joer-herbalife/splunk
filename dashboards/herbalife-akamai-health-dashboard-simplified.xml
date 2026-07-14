@@ -1,0 +1,293 @@
+<dashboard version="1.1">
+  <label>Herbalife Akamai Website Health (Simplified)</label>
+  <description>Error-focused view: availability, error rate, regional impact, and 4xx/5xx breakdown for the top 100 hosts.</description>
+
+  <fieldset submitButton="false">
+    <input type="time" token="time_range">
+      <label>Time Range</label>
+      <default>
+        <earliest>-10h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+  </fieldset>
+
+  <search id="base_akamai">
+    <query><![CDATA[
+      index="akamai_metrics_prod"
+      | spath input=_raw
+      | spath input=_raw path=reqHost output=raw_reqHost
+      | spath input=_raw path=country output=raw_country
+      | spath input=_raw path=statusCode output=raw_statusCode
+      | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+      | eval reqHost=coalesce(reqHost, raw_reqHost),
+             country=coalesce(country, raw_country),
+             status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+             statusCode=status_code
+      | eval status=tonumber(status_code)
+      | eval status_class=case(
+               status=0, "no_response",
+               status>=200 AND status<300, "2xx",
+               status>=300 AND status<400, "3xx",
+               status>=400 AND status<500, "4xx",
+               status>=500 AND status<600, "5xx",
+               true(), "unknown"
+             )
+      | eval is_2xx=if(status>=200 AND status<300,1,0),
+             is_3xx=if(status>=300 AND status<400,1,0),
+             is_4xx=if(status>=400 AND status<500,1,0),
+             is_5xx=if(status>=500 AND status<600,1,0),
+             is_no_response=if(status=0,1,0),
+             is_error=if(status>=500 OR status=0,1,0)
+      | fillnull value="-" reqHost reqPath country state serverCountry billingRegion statusCode status_code
+    ]]></query>
+    <earliest>$time_range.earliest$</earliest>
+    <latest>$time_range.latest$</latest>
+  </search>
+
+  <row>
+    <panel>
+      <title>Availability</title>
+      <single>
+        <search>
+          <query><![CDATA[
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | eval is_error=if(status>=500 OR status=0,1,0)
+            | stats count as requests sum(is_error) as errors
+            | eval availability=round(((requests-errors)/requests)*100,3)
+            | fields availability
+          ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xdc4e41","0xf8be34","0x53a051"]</option>
+        <option name="rangeValues">[99,99.9]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Error Rate</title>
+      <single>
+        <search>
+          <query><![CDATA[
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | eval is_error=if(status>=500 OR status=0,1,0)
+            | stats count as requests sum(is_error) as errors
+            | eval error_rate=round((errors/requests)*100,5)
+            | fields error_rate
+          ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0.1,1]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Total Requests by 4xx &amp; 5xx Over Time</title>
+      <chart>
+        <search>
+          <query><![CDATA[
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | eval is_4xx=if(status>=400 AND status<500,1,0),
+                   is_5xx=if(status>=500 AND status<600,1,0)
+            | timechart span=5m sum(is_4xx) as 4xx sum(is_5xx) as 5xx
+          ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Requests</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Error Rate Heatmap by Region</title>
+      <map>
+        <search>
+          <query><![CDATA[
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=country output=raw_country
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval country=coalesce(country, raw_country),
+                   status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | eval is_4xx=if(status>=400 AND status<500,1,0),
+                   is_5xx=if(status>=500 AND status<600,1,0),
+                   is_no_response=if(status=0,1,0)
+            | fillnull value="-" country
+            | stats count as requests
+                    sum(is_4xx) as errors_4xx
+                    sum(is_5xx) as errors_5xx
+                    sum(is_no_response) as no_response
+                    by country
+            | eval errors=errors_4xx+errors_5xx+no_response
+            | where requests >= 100 AND errors > 0
+            | eval error_rate=round((errors/requests)*100,3)
+            | eval country_name=case(
+                country=="AD","Andorra", country=="AE","United Arab Emirates", country=="AF","Afghanistan",
+                country=="AG","Antigua and Barbuda", country=="AL","Albania", country=="AM","Armenia",
+                country=="AO","Angola", country=="AR","Argentina", country=="AT","Austria",
+                country=="AU","Australia", country=="AZ","Azerbaijan", country=="BA","Bosnia and Herzegovina",
+                country=="BB","Barbados", country=="BD","Bangladesh", country=="BE","Belgium",
+                country=="BF","Burkina Faso", country=="BG","Bulgaria", country=="BH","Bahrain",
+                country=="BI","Burundi", country=="BJ","Benin", country=="BN","Brunei",
+                country=="BO","Bolivia", country=="BR","Brazil", country=="BS","The Bahamas",
+                country=="BT","Bhutan", country=="BW","Botswana", country=="BY","Belarus",
+                country=="BZ","Belize", country=="CA","Canada", country=="CD","Democratic Republic of the Congo",
+                country=="CF","Central African Republic", country=="CG","Republic of the Congo", country=="CH","Switzerland",
+                country=="CI","Ivory Coast", country=="CL","Chile", country=="CM","Cameroon",
+                country=="CN","China", country=="CO","Colombia", country=="CR","Costa Rica",
+                country=="CU","Cuba", country=="CY","Cyprus", country=="CZ","Czech Republic",
+                country=="DE","Germany", country=="DJ","Djibouti", country=="DK","Denmark",
+                country=="DO","Dominican Republic", country=="DZ","Algeria", country=="EC","Ecuador",
+                country=="EE","Estonia", country=="EG","Egypt", country=="ER","Eritrea",
+                country=="ES","Spain", country=="ET","Ethiopia", country=="FI","Finland",
+                country=="FJ","Fiji", country=="FR","France", country=="GA","Gabon",
+                country=="GB","United Kingdom", country=="GE","Georgia", country=="GH","Ghana",
+                country=="GL","Greenland", country=="GM","Gambia", country=="GN","Guinea",
+                country=="GQ","Equatorial Guinea", country=="GR","Greece", country=="GT","Guatemala",
+                country=="GW","Guinea-Bissau", country=="GY","Guyana", country=="HN","Honduras",
+                country=="HR","Croatia", country=="HT","Haiti", country=="HU","Hungary",
+                country=="ID","Indonesia", country=="IE","Ireland", country=="IL","Israel",
+                country=="IN","India", country=="IQ","Iraq", country=="IR","Iran",
+                country=="IS","Iceland", country=="IT","Italy", country=="JM","Jamaica",
+                country=="JO","Jordan", country=="JP","Japan", country=="KE","Kenya",
+                country=="KG","Kyrgyzstan", country=="KH","Cambodia", country=="KP","North Korea",
+                country=="KR","South Korea", country=="KW","Kuwait", country=="KZ","Kazakhstan",
+                country=="LA","Laos", country=="LB","Lebanon", country=="LK","Sri Lanka",
+                country=="LR","Liberia", country=="LS","Lesotho", country=="LT","Lithuania",
+                country=="LU","Luxembourg", country=="LV","Latvia", country=="LY","Libya",
+                country=="MA","Morocco", country=="MD","Moldova", country=="ME","Montenegro",
+                country=="MG","Madagascar", country=="MK","Macedonia", country=="ML","Mali",
+                country=="MM","Myanmar", country=="MN","Mongolia", country=="MR","Mauritania",
+                country=="MW","Malawi", country=="MX","Mexico", country=="MY","Malaysia",
+                country=="MZ","Mozambique", country=="NA","Namibia", country=="NC","New Caledonia",
+                country=="NE","Niger", country=="NG","Nigeria", country=="NI","Nicaragua",
+                country=="NL","Netherlands", country=="NO","Norway", country=="NP","Nepal",
+                country=="NZ","New Zealand", country=="OM","Oman", country=="PA","Panama",
+                country=="PE","Peru", country=="PG","Papua New Guinea", country=="PH","Philippines",
+                country=="PK","Pakistan", country=="PL","Poland", country=="PR","Puerto Rico",
+                country=="PT","Portugal", country=="PY","Paraguay", country=="QA","Qatar",
+                country=="RO","Romania", country=="RS","Republic of Serbia", country=="RU","Russia",
+                country=="RW","Rwanda", country=="SA","Saudi Arabia", country=="SB","Solomon Islands",
+                country=="SD","Sudan", country=="SE","Sweden", country=="SI","Slovenia",
+                country=="SK","Slovakia", country=="SL","Sierra Leone", country=="SN","Senegal",
+                country=="SO","Somalia", country=="SR","Suriname", country=="SS","South Sudan",
+                country=="SV","El Salvador", country=="SY","Syria", country=="SZ","Swaziland",
+                country=="TD","Chad", country=="TG","Togo", country=="TH","Thailand",
+                country=="TJ","Tajikistan", country=="TL","Timor-Leste", country=="TM","Turkmenistan",
+                country=="TN","Tunisia", country=="TR","Turkey", country=="TT","Trinidad and Tobago",
+                country=="TW","Taiwan", country=="TZ","United Republic of Tanzania", country=="UA","Ukraine",
+                country=="UG","Uganda", country=="US","United States of America", country=="UY","Uruguay",
+                country=="UZ","Uzbekistan", country=="VE","Venezuela", country=="VN","Vietnam",
+                country=="VU","Vanuatu", country=="YE","Yemen", country=="ZA","South Africa",
+                country=="ZM","Zambia", country=="ZW","Zimbabwe",
+                true(), country)
+            | fields country_name error_rate
+            | geom geo_countries featureIdField="country_name"
+          ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="mapping.type">choropleth</option>
+        <option name="mapping.choroplethLayer.colorMode">auto</option>
+        <option name="mapping.choroplethLayer.maximumColor">0xdc4e41</option>
+        <option name="mapping.choroplethLayer.minimumColor">0xffe98c</option>
+        <option name="mapping.choroplethLayer.showBorder">1</option>
+        <option name="mapping.choroplethLayer.neutralPoint">0</option>
+        <option name="mapping.data.maxClusters">100</option>
+        <option name="mapping.map.center">(20,0)</option>
+        <option name="mapping.map.zoom">2</option>
+        <option name="mapping.map.panning">true</option>
+        <option name="drilldown">none</option>
+      </map>
+    </panel>
+  </row>
+  
+  <row>
+    <panel>
+      <title>Errors by Region (4xx &amp; 5xx)</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | stats count as requests
+                    sum(is_4xx) as 4xx
+                    sum(is_5xx) as 5xx
+                    sum(is_no_response) as no_response
+                    by country
+            | eval total_errors='4xx'+'5xx'+no_response
+            | where total_errors > 0
+            | eval "error %"=round((total_errors/requests)*100,3)
+            | table country requests "error %" 4xx 5xx
+            | sort - requests
+            | head 20
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Status Mix by Host (4xx &amp; 5xx) — Top 20</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | stats count as requests
+                    sum(is_4xx) as 4xx
+                    sum(is_5xx) as 5xx
+                    sum(is_no_response) as no_response
+                    by reqHost
+            | eval total_errors='4xx'+'5xx'+no_response
+            | where total_errors > 0
+            | eval "error %"=round((total_errors/requests)*100,3)
+            | table reqHost requests "error %" 4xx 5xx
+            | sort - requests
+            | head 20
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+</dashboard>
