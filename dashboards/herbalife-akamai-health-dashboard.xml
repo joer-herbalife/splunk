@@ -1,0 +1,591 @@
+<dashboard version="1.1">
+  <label>Herbalife Akamai Website Health</label>
+  <description>Endpoint health, latency, regional impact, and cache/origin symptoms from Akamai metrics.</description>
+
+  <fieldset submitButton="false">
+    <input type="time" token="time_range">
+      <label>Time Range</label>
+      <default>
+        <earliest>-10h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="health_filter">
+      <label>Health Filter</label>
+      <choice value="all">All</choice>
+      <choice value="errors">Error</choice>
+      <choice value="slow_ttfb">Slow TimeToFirstByte</choice>
+      <choice value="slow_download">Slow Download</choice>
+      <choice value="bad">Errors and Slow</choice>
+      <default>all</default>
+      <initialValue>all</initialValue>
+    </input>
+    <input type="dropdown" token="status_class_filter">
+      <label>Status</label>
+      <choice value="*">All</choice>
+      <choice value="2xx">2xx</choice>
+      <choice value="3xx">3xx</choice>
+      <choice value="4xx">4xx</choice>
+      <choice value="5xx">5xx</choice>
+      <choice value="no_response">No Response</choice>
+      <choice value="unknown">Unknown</choice>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="dropdown" token="method_filter">
+      <label>HTTP Method</label>
+      <choice value="*">All</choice>
+      <choice value="GET">GET</choice>
+      <choice value="POST">POST</choice>
+      <choice value="PUT">PUT</choice>
+      <choice value="PATCH">PATCH</choice>
+      <choice value="DELETE">DELETE</choice>
+      <choice value="HEAD">HEAD</choice>
+      <choice value="OPTIONS">OPTIONS</choice>
+      <choice value="CONNECT">CONNECT</choice>
+      <choice value="TRACE">TRACE</choice>
+      <default>GET</default>
+      <initialValue>GET</initialValue>
+    </input>
+    <input type="dropdown" token="country_filter">
+      <label>Country</label>
+      <choice value="*">All Countries</choice>
+      <search>
+        <query><![CDATA[
+          index="akamai_metrics_prod"
+          | spath input=_raw
+          | search reqMethod="$method_filter$" reqPath="$path_filter$" reqHost="$host_filter$"
+          | fillnull value="-" country
+          | stats count as requests by country
+          | eval country_label=country." (".requests.")"
+          | sort - requests
+        ]]></query>
+        <earliest>$time_range.earliest$</earliest>
+        <latest>$time_range.latest$</latest>
+      </search>
+      <fieldForLabel>country_label</fieldForLabel>
+      <fieldForValue>country</fieldForValue>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <html>
+      <div style="clear: both;"></div>
+    </html>
+    <input type="text" token="path_filter">
+      <label>Path Filter (e.g., /*en-us/*)</label>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="text" token="host_filter">
+      <label>Host Filter (e.g., vn.herbalife.com)</label>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+    <input type="text" token="ttfb_threshold">
+      <label>TimeToFirstByte Threshold (ms)</label>
+      <default>3000</default>
+      <initialValue>3000</initialValue>
+    </input>
+    <input type="text" token="download_threshold">
+      <label>Download Threshold (ms)</label>
+      <default>5000</default>
+      <initialValue>5000</initialValue>
+    </input>
+  </fieldset>
+
+  <search id="base_akamai">
+    <query><![CDATA[
+      index="akamai_metrics_prod"
+      | spath input=_raw
+      | spath input=_raw path=reqMethod output=raw_reqMethod
+      | spath input=_raw path=reqPath output=raw_reqPath
+      | spath input=_raw path=reqHost output=raw_reqHost
+      | spath input=_raw path=country output=raw_country
+      | spath input=_raw path=referer output=raw_referer
+      | spath input=_raw path=statusCode output=raw_statusCode
+      | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+      | spath input=_raw path=timeToFirstByte output=raw_timeToFirstByte
+      | rex field=_raw "\"timeToFirstByte\":\"?(?<rex_timeToFirstByte>[0-9.]+)\"?"
+      | spath input=_raw path=downloadTime output=raw_downloadTime
+      | rex field=_raw "\"downloadTime\":\"?(?<rex_downloadTime>[0-9.]+)\"?"
+      | spath input=_raw path=turnAroundTimeMSec output=raw_turnAroundTimeMSec
+      | rex field=_raw "\"turnAroundTimeMSec\":\"?(?<rex_turnAroundTimeMSec>[0-9.]+)\"?"
+      | spath input=_raw path=transferTimeMSec output=raw_transferTimeMSec
+      | rex field=_raw "\"transferTimeMSec\":\"?(?<rex_transferTimeMSec>[0-9.]+)\"?"
+      | spath input=_raw path=tlsOverheadTimeMSec output=raw_tlsOverheadTimeMSec
+      | rex field=_raw "\"tlsOverheadTimeMSec\":\"?(?<rex_tlsOverheadTimeMSec>[0-9.]+)\"?"
+      | spath input=_raw path=edgeAttempts output=raw_edgeAttempts
+      | spath input=_raw path=throughput output=raw_throughput
+      | eval reqMethod=coalesce(reqMethod, raw_reqMethod),
+             reqPath=coalesce(reqPath, raw_reqPath),
+             reqHost=coalesce(reqHost, raw_reqHost),
+             country=coalesce(country, raw_country),
+             referer=coalesce(referer, raw_referer),
+             status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+             statusCode=status_code,
+             timeToFirstByte=coalesce(mvindex(timeToFirstByte,0), mvindex(raw_timeToFirstByte,0), rex_timeToFirstByte),
+             downloadTime=coalesce(mvindex(downloadTime,0), mvindex(raw_downloadTime,0), rex_downloadTime),
+             turnAroundTimeMSec=coalesce(mvindex(turnAroundTimeMSec,0), mvindex(raw_turnAroundTimeMSec,0), rex_turnAroundTimeMSec),
+             transferTimeMSec=coalesce(mvindex(transferTimeMSec,0), mvindex(raw_transferTimeMSec,0), rex_transferTimeMSec),
+             tlsOverheadTimeMSec=coalesce(mvindex(tlsOverheadTimeMSec,0), mvindex(raw_tlsOverheadTimeMSec,0), rex_tlsOverheadTimeMSec),
+             edgeAttempts=coalesce(edgeAttempts, raw_edgeAttempts),
+             throughput=coalesce(throughput, raw_throughput)
+      | search reqMethod="$method_filter$" reqPath="$path_filter$"
+      | search reqHost="$host_filter$" country="$country_filter$"
+      | eval status=tonumber(status_code),
+             ttfb=tonumber(replace(timeToFirstByte,"[^0-9.]","")),
+             download_ms=tonumber(replace(downloadTime,"[^0-9.]","")),
+             turnaround_ms=tonumber(replace(turnAroundTimeMSec,"[^0-9.]","")),
+             transfer_ms=tonumber(replace(transferTimeMSec,"[^0-9.]","")),
+             tls_ms=tonumber(replace(tlsOverheadTimeMSec,"[^0-9.]","")),
+             edge_attempts=tonumber(edgeAttempts),
+             throughput_kbps=tonumber(throughput)
+      | eval status_class=case(
+               status=0, "no_response",
+               status>=200 AND status<300, "2xx",
+               status>=300 AND status<400, "3xx",
+               status>=400 AND status<500, "4xx",
+               status>=500 AND status<600, "5xx",
+               true(), "unknown"
+             )
+      | eval is_2xx=if(status>=200 AND status<300,1,0),
+             is_3xx=if(status>=300 AND status<400,1,0),
+             is_4xx=if(status>=400 AND status<500,1,0),
+             is_5xx=if(status>=500 AND status<600,1,0),
+             is_no_response=if(status=0,1,0),
+             is_error=if(status>=500 OR status=0,1,0),
+             is_slow_ttfb=if(ttfb>tonumber("$ttfb_threshold$"),1,0),
+             is_slow_download=if(download_ms>tonumber("$download_threshold$"),1,0)
+      | where "$status_class_filter$"="*" OR status_class="$status_class_filter$"
+      | fillnull value="-" reqHost reqPath referer country state serverCountry billingRegion cacheStatus statusCode status_code
+    ]]></query>
+    <earliest>$time_range.earliest$</earliest>
+    <latest>$time_range.latest$</latest>
+  </search>
+
+  <row>
+    <panel>
+      <title>Availability</title>
+      <single>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests sum(is_error) as errors
+            | eval availability=round(((requests-errors)/requests)*100,3)
+            | fields availability
+          ]]></query>
+        </search>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xdc4e41","0xf8be34","0x53a051"]</option>
+        <option name="rangeValues">[99,99.9]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Error Rate</title>
+      <single>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests sum(is_error) as errors
+            | eval error_rate=round((errors/requests)*100,5)
+            | fields error_rate
+          ]]></query>
+        </search>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0.1,1]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>P95 (TimeToFirstByte)</title>
+      <single>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats perc95(ttfb) as p95
+            | eval p95=round(p95,0)
+          ]]></query>
+        </search>
+        <option name="unit">ms</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[1000,3000]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Requests</title>
+      <single>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+          ]]></query>
+        </search>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Availability, Errors, and Latency Over Time</title>
+      <chart>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | timechart span=5m count as requests sum(is_error) as errors perc95(ttfb) as p95 perc99(ttfb) as p99
+            | eval error_pct=round((errors/requests)*100,5),
+                   availability_pct=round(((requests-errors)/requests)*100,3),
+                   p95=round(p95,0),
+                   p99=round(p99,0)
+            | fields _time requests errors error_pct availability_pct p95 p99
+          ]]></query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Value</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.drilldown">none</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Top Hosts by Volume</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | stats count as requests
+                    sum(is_error) as errors
+                    perc95(ttfb) as p95
+                    by reqHost
+            | eval error_pct=round((errors/requests)*100,3),
+                   p95=round(p95,0)
+            | sort - requests
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Top Hosts by Error Rate</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    sum(is_error) as server_or_no_response_errors
+                    sum(is_4xx) as client_errors_4xx
+                    perc95(ttfb) as p95
+                    by reqHost
+            | where requests >= 20
+            | eval total_http_errors=server_or_no_response_errors+client_errors_4xx
+            | eval error_pct=round((total_http_errors/requests)*100,3),
+                   client_error_pct=round((client_errors_4xx/requests)*100,3),
+                   server_error_pct=round((server_or_no_response_errors/requests)*100,3),
+                   p95=round(p95,0)
+            | sort - error_pct - requests
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Top Hosts by P95 (TimeToFirstByte)</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    count(ttfb) as ttfb_samples
+                    sum(is_error) as errors
+                    perc50(ttfb) as p50
+                    perc95(ttfb) as p95
+                    perc99(ttfb) as p99
+                    perc95(download_ms) as p95_download_ms
+                    by reqHost
+            | where requests >= 20
+            | eval error_pct=round((errors/requests)*100,3),
+                   p50=round(p50,0),
+                   p95=round(p95,0),
+                   p99=round(p99,0),
+                   p95_download_ms=round(p95_download_ms,0)
+            | eval p95_sort=if(isnull(p95),-1,p95)
+            | sort - p95_sort - requests
+            | fields - p95_sort
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Slowest Pages by P95 (TimeToFirstByte)</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    count(ttfb) as ttfb_samples
+                    sum(is_error) as errors
+                    sum(is_slow_ttfb) as slow_ttfb_requests
+                    perc50(ttfb) as p50
+                    perc95(ttfb) as p95
+                    perc99(ttfb) as p99
+                    perc95(download_ms) as p95_download_ms
+                    values(status_code) as status_codes
+                    by reqHost reqPath
+            | where requests >= 20
+            | eval error_pct=round((errors/requests)*100,3),
+                   slow_ttfb_pct=round((slow_ttfb_requests/requests)*100,2),
+                   p50=round(p50,0),
+                   p95=round(p95,0),
+                   p99=round(p99,0),
+                   p95_download_ms=round(p95_download_ms,0)
+            | eval p95_sort=if(isnull(p95),-1,p95)
+            | sort - p95_sort - requests
+            | fields - p95_sort
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Top Unhealthy Pages</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | eval is_client_error=if(status>=400 AND status<500,1,0),
+                   bad_request=if(is_error=1 OR is_client_error=1 OR is_slow_ttfb=1 OR is_slow_download=1,1,0)
+            | stats count as requests
+                    sum(bad_request) as bad_requests
+                    sum(is_error) as server_errors
+                    sum(is_client_error) as client_errors
+                    sum(is_slow_ttfb) as slow_ttfb
+                    sum(is_slow_download) as slow_downloads
+                    count(ttfb) as ttfb_samples
+                    perc95(ttfb) as p95
+                    perc95(download_ms) as p95_download
+                    values(referer) as referers
+                    values(status_code) as status_codes
+                    by reqHost reqPath
+            | where requests >= 20
+            | eval bad_pct=round((bad_requests/requests)*100,2),
+                   server_error_pct=round((server_errors/requests)*100,3),
+                   client_error_pct=round((client_errors/requests)*100,3),
+                   p95=round(p95,0),
+                   p95_download=round(p95_download,0),
+                   referer=mvjoin(mvindex(referers,0,4),", ")
+            | fields - referers
+            | eval p95_sort=if(isnull(p95),-1,p95)
+            | sort - bad_pct - bad_requests - p95_sort - requests
+            | fields - p95_sort
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Status Mix by Host</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    sum(is_2xx) as 2xx
+                    sum(is_3xx) as 3xx
+                    sum(is_4xx) as 4xx
+                    sum(is_5xx) as 5xx
+                    sum(is_no_response) as no_response
+                    by reqHost
+            | where requests >= 20
+            | eval "2xx %"=round(('2xx'/requests)*100,2),
+                   "3xx %"=round(('3xx'/requests)*100,2),
+                   "4xx %"=round(('4xx'/requests)*100,2),
+                   "5xx %"=round(('5xx'/requests)*100,2),
+                   "No Response %"=round((no_response/requests)*100,2)
+            | table reqHost requests "2xx %" "3xx %" "4xx %" "5xx %" "No Response %" 2xx 3xx 4xx 5xx no_response
+            | sort - "5xx %" - "4xx %" - requests
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Status Code Detail</title>
+      <chart>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests by status_code
+            | sort - requests
+            | head 25
+          ]]></query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.axisTitleX.text">Requests</option>
+        <option name="charting.axisTitleY.text">Status Code</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.drilldown">none</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Status Code Detail by Host</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests by reqHost status_code
+            | eventstats sum(requests) as host_total by reqHost
+            | where host_total >= 20
+            | eval pct=round((requests/host_total)*100,2)
+            | sort - pct - requests
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Regional Health</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    sum(is_error) as errors
+                    perc95(ttfb) as p95
+                    perc99(ttfb) as p99
+                    perc95(download_ms) as p95_download_ms
+                    by country state serverCountry billingRegion reqHost
+            | where requests >= 20
+            | eval error_pct=round((errors/requests)*100,3),
+                   availability_pct=round(((requests-errors)/requests)*100,3),
+                   p95=round(p95,0),
+                   p99=round(p99,0),
+                   p95_download_ms=round(p95_download_ms,0)
+            | sort - error_pct - p95
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Cache and Origin Symptoms</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    sum(is_error) as errors
+                    perc95(ttfb) as p95
+                    perc95(turnaround_ms) as p95_turnaround_ms
+                    perc95(download_ms) as p95_download_ms
+                    avg(edge_attempts) as avg_edge_attempts
+                    avg(throughput_kbps) as avg_throughput
+                    by reqHost cacheStatus
+            | eval error_pct=round((errors/requests)*100,3),
+                   p95=round(p95,0),
+                   p95_turnaround_ms=round(p95_turnaround_ms,0),
+                   p95_download_ms=round(p95_download_ms,0),
+                   avg_edge_attempts=round(avg_edge_attempts,2),
+                   avg_throughput=round(avg_throughput,2)
+            | sort - error_pct - p95
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Pages With Regional Skew</title>
+      <table>
+        <search base="base_akamai">
+          <query><![CDATA[
+            | where "$health_filter$"="all" OR ("$health_filter$"="errors" AND is_error=1) OR ("$health_filter$"="slow_ttfb" AND is_slow_ttfb=1) OR ("$health_filter$"="slow_download" AND is_slow_download=1) OR ("$health_filter$"="bad" AND (is_error=1 OR is_slow_ttfb=1 OR is_slow_download=1))
+            | stats count as requests
+                    sum(is_error) as errors
+                    perc95(ttfb) as p95
+                    by reqHost reqPath country
+            | where requests >= 10
+            | eval error_pct=round((errors/requests)*100,3),
+                   p95=round(p95,0)
+            | eventstats avg(error_pct) as avg_page_error_pct avg(p95) as avg_page_p95 by reqHost reqPath
+            | eval error_skew=round(error_pct-avg_page_error_pct,3),
+                   latency_skew_ms=round(p95-avg_page_p95,0)
+            | where error_skew > 2 OR latency_skew_ms > 1000
+            | sort - error_skew - latency_skew_ms
+            | head 50
+          ]]></query>
+        </search>
+        <option name="count">20</option>
+        <option name="wrap">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="drilldown">row</option>
+      </table>
+    </panel>
+  </row>
+</dashboard>
