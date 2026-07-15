@@ -1,6 +1,6 @@
 <dashboard version="1.1">
-  <label>Herbalife Akamai Website Health (Simplified)</label>
-  <description>Error-focused view: availability, error rate, regional impact, and 4xx/5xx breakdown for the top 100 hosts.</description>
+  <label>Herbalife Akamai Website Health (Top 20)</label>
+  <description>Error-focused view: availability, error rate, regional impact, and 4xx/5xx breakdown for the top 20 hosts.</description>
 
   <fieldset submitButton="false">
     <input type="time" token="time_range">
@@ -74,7 +74,7 @@
       </single>
     </panel>
     <panel>
-      <title>Error Rate</title>
+      <title>Server Error Rate (5xx / no-response)</title>
       <single>
         <search>
           <query><![CDATA[
@@ -97,6 +97,33 @@
         <option name="useColors">1</option>
         <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
         <option name="rangeValues">[0.1,1]</option>
+        <option name="drilldown">none</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Client Error Rate (4xx)</title>
+      <single>
+        <search>
+          <query><![CDATA[
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | eval is_4xx=if(status>=400 AND status<500,1,0)
+            | stats count as requests sum(is_4xx) as errors_4xx
+            | eval client_error_rate=round((errors_4xx/requests)*100,5)
+            | fields client_error_rate
+          ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
+        </search>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[1,5]</option>
         <option name="drilldown">none</option>
       </single>
     </panel>
@@ -239,54 +266,134 @@
   
   <row>
     <panel>
-      <title>Errors by Region (4xx &amp; 5xx)</title>
+      <title>Errors [4xx, 5xx] by Region</title>
       <table>
-        <search base="base_akamai">
+        <search>
           <query><![CDATA[
-            | stats count as requests
-                    sum(is_4xx) as 4xx
-                    sum(is_5xx) as 5xx
-                    sum(is_no_response) as no_response
-                    by country
-            | eval total_errors='4xx'+'5xx'+no_response
-            | where total_errors > 0
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=country output=raw_country
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval country=coalesce(country, raw_country),
+                   status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | fillnull value="-" country
+            | eval code=case(status>=400 AND status<600, status_code."s",
+                             status=0, "zznoresp",
+                             status>=200 AND status<400, "zzok",
+                             true(), "zzother")
+            | chart useother=f limit=0 count over country by code
+            | addtotals fieldname=requests
+            | eval total_errors=requests-coalesce(zzok,0)-coalesce(zzother,0)
             | eval "error %"=round((total_errors/requests)*100,3)
-            | table country requests "error %" 4xx 5xx
+            | where total_errors > 0
+            | fields - zzok - zzother - zznoresp - total_errors
             | sort - requests
             | head 20
+            | table country requests "error %" *
           ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
         </search>
         <option name="count">20</option>
         <option name="wrap">false</option>
         <option name="rowNumbers">true</option>
-        <option name="drilldown">none</option>
+        <option name="drilldown">cell</option>
+        <drilldown>
+          <condition field="400s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22400%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="401s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22401%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="403s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22403%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="404s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22404%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="405s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22405%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="406s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22406%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="408s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22408%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="409s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22409%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="410s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22410%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="413s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22413%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="414s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22414%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="415s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22415%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="416s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22416%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="429s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22429%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="431s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22431%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="500s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22500%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="501s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22501%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="502s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22502%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="503s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22503%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="504s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22504%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="505s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22505%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="507s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22507%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="508s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22508%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="511s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22%20statusCode%3D%22511%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20country%3D%22$row.country$%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+        </drilldown>
       </table>
     </panel>
   </row>
 
   <row>
     <panel>
-      <title>Status Mix by Host (4xx &amp; 5xx) — Top 20</title>
+      <title>Errors [4xx, 5xx] by Host</title>
       <table>
-        <search base="base_akamai">
+        <search>
           <query><![CDATA[
-            | stats count as requests
-                    sum(is_4xx) as 4xx
-                    sum(is_5xx) as 5xx
-                    sum(is_no_response) as no_response
-                    by reqHost
-            | eval total_errors='4xx'+'5xx'+no_response
-            | where total_errors > 0
+            index="akamai_metrics_prod"
+            | spath input=_raw
+            | spath input=_raw path=reqHost output=raw_reqHost
+            | spath input=_raw path=statusCode output=raw_statusCode
+            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
+            | eval reqHost=coalesce(reqHost, raw_reqHost),
+                   status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
+                   status=tonumber(status_code)
+            | fillnull value="-" reqHost
+            | eval code=case(status>=400 AND status<600, status_code."s",
+                             status=0, "zznoresp",
+                             status>=200 AND status<400, "zzok",
+                             true(), "zzother")
+            | chart useother=f limit=0 count over reqHost by code
+            | addtotals fieldname=requests
+            | eval total_errors=requests-coalesce(zzok,0)-coalesce(zzother,0)
             | eval "error %"=round((total_errors/requests)*100,3)
-            | table reqHost requests "error %" 4xx 5xx
+            | where total_errors > 0
+            | fields - zzok - zzother - zznoresp - total_errors
             | sort - requests
             | head 20
+            | table reqHost requests "error %" *
           ]]></query>
+          <earliest>$time_range.earliest$</earliest>
+          <latest>$time_range.latest$</latest>
         </search>
         <option name="count">20</option>
         <option name="wrap">false</option>
         <option name="rowNumbers">true</option>
-        <option name="drilldown">none</option>
+        <option name="drilldown">cell</option>
+        <drilldown>
+          <condition field="400s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22400%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="401s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22401%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="403s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22403%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="404s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22404%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="405s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22405%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="406s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22406%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="408s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22408%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="409s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22409%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="410s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22410%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="413s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22413%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="414s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22414%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="415s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22415%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="416s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22416%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="429s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22429%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="431s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22431%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="500s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22500%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="501s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22501%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="502s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22502%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="503s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22503%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="504s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22504%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="505s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22505%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="507s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22507%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="508s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22508%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition field="511s"><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22%20statusCode%3D%22511%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+          <condition><link target="_blank"><![CDATA[/app/search/search?q=search%20index%3D%22akamai_metrics_prod%22%20%7C%20spath%20input%3D_raw%20%7C%20search%20reqHost%3D%22$row.reqHost$%22&earliest=$time_range.earliest$&latest=$time_range.latest$]]></link></condition>
+        </drilldown>
       </table>
     </panel>
   </row>
