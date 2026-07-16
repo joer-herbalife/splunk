@@ -12,34 +12,38 @@
     </input>
   </fieldset>
 
+  <!--
+    Shared base search: reads the index and extracts the required fields ONCE.
+    All panels below run as post-process searches against this (base="base_akamai"),
+    so raw events are scanned and parsed a single time per dashboard load instead of
+    once per panel. Uses targeted rex (3 fields) instead of spath input=_raw (full
+    JSON parse) for a large reduction in per-event cost.
+
+    Note: this base is non-transforming, so post-processing is capped at the
+    dispatch maxout limit (default 500k events). For very wide time ranges / high
+    volume, promote status_code/country/reqHost to indexed fields and use tstats,
+    or add a transforming summary. See option (B) in the review.
+  -->
   <search id="base_akamai">
     <query><![CDATA[
       index="akamai_metrics_prod"
-      | spath input=_raw
-      | spath input=_raw path=reqHost output=raw_reqHost
-      | spath input=_raw path=country output=raw_country
-      | spath input=_raw path=statusCode output=raw_statusCode
+      | rex field=_raw "\"reqHost\":\"?(?<rex_reqHost>[^\",}]+)\"?"
+      | rex field=_raw "\"country\":\"?(?<rex_country>[^\",}]+)\"?"
       | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-      | eval reqHost=coalesce(reqHost, raw_reqHost),
-             country=coalesce(country, raw_country),
-             status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-             statusCode=status_code
-      | eval status=tonumber(status_code)
-      | eval status_class=case(
-               status=0, "no_response",
-               status>=200 AND status<300, "2xx",
-               status>=300 AND status<400, "3xx",
-               status>=400 AND status<500, "4xx",
-               status>=500 AND status<600, "5xx",
-               true(), "unknown"
-             )
+      | eval reqHost=coalesce(reqHost, rex_reqHost),
+             country=coalesce(country, rex_country),
+             status_code=coalesce(mvindex(statusCode,0), rex_statusCode),
+             status=tonumber(status_code)
       | eval is_2xx=if(status>=200 AND status<300,1,0),
-             is_3xx=if(status>=300 AND status<400,1,0),
              is_4xx=if(status>=400 AND status<500,1,0),
              is_5xx=if(status>=500 AND status<600,1,0),
              is_no_response=if(status=0,1,0),
              is_error=if(status>=500 OR status=0,1,0)
-      | fillnull value="-" reqHost reqPath country state serverCountry billingRegion statusCode status_code
+      | eval code=case(status>=400 AND status<600, status_code."s",
+                       status=0, "zznoresp",
+                       status>=200 AND status<400, "zzok",
+                       true(), "zzother")
+      | fillnull value="-" reqHost country
     ]]></query>
     <earliest>$time_range.earliest$</earliest>
     <latest>$time_range.latest$</latest>
@@ -49,21 +53,12 @@
     <panel>
       <title>Availability</title>
       <single>
-        <search>
+        <search base="base_akamai">
           <query><![CDATA[
-            index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=statusCode output=raw_statusCode
-            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
-            | eval is_error=if(status>=500 OR status=0,1,0)
-            | stats count as requests sum(is_error) as errors
+            stats count as requests sum(is_error) as errors
             | eval availability=round(((requests-errors)/requests)*100,3)
             | fields availability
           ]]></query>
-          <earliest>$time_range.earliest$</earliest>
-          <latest>$time_range.latest$</latest>
         </search>
         <option name="unit">%</option>
         <option name="colorMode">block</option>
@@ -76,21 +71,12 @@
     <panel>
       <title>Server Error Rate (5xx / no-response)</title>
       <single>
-        <search>
+        <search base="base_akamai">
           <query><![CDATA[
-            index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=statusCode output=raw_statusCode
-            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
-            | eval is_error=if(status>=500 OR status=0,1,0)
-            | stats count as requests sum(is_error) as errors
+            stats count as requests sum(is_error) as errors
             | eval error_rate=round((errors/requests)*100,5)
             | fields error_rate
           ]]></query>
-          <earliest>$time_range.earliest$</earliest>
-          <latest>$time_range.latest$</latest>
         </search>
         <option name="unit">%</option>
         <option name="colorMode">block</option>
@@ -103,21 +89,12 @@
     <panel>
       <title>Client Error Rate (4xx)</title>
       <single>
-        <search>
+        <search base="base_akamai">
           <query><![CDATA[
-            index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=statusCode output=raw_statusCode
-            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
-            | eval is_4xx=if(status>=400 AND status<500,1,0)
-            | stats count as requests sum(is_4xx) as errors_4xx
+            stats count as requests sum(is_4xx) as errors_4xx
             | eval client_error_rate=round((errors_4xx/requests)*100,5)
             | fields client_error_rate
           ]]></query>
-          <earliest>$time_range.earliest$</earliest>
-          <latest>$time_range.latest$</latest>
         </search>
         <option name="unit">%</option>
         <option name="colorMode">block</option>
@@ -133,14 +110,19 @@
     <panel>
       <title>Total Requests by 4xx &amp; 5xx Over Time</title>
       <chart>
+        <!--
+          Dedicated search (NOT the shared base). timechart must cover the full
+          time range, but a non-transforming base is capped at the dispatch maxout
+          limit (most-recent-first), which truncates older buckets and makes the
+          chart appear to ignore the time range. Running timechart directly against
+          the index is transforming, so it aggregates the whole range with no event
+          cap. Kept cheap via a single targeted rex (only statusCode is needed).
+        -->
         <search>
           <query><![CDATA[
             index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=statusCode output=raw_statusCode
             | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
+            | eval status=tonumber(coalesce(mvindex(statusCode,0), rex_statusCode))
             | eval is_4xx=if(status>=400 AND status<500,1,0),
                    is_5xx=if(status>=500 AND status<600,1,0)
             | timechart span=5m sum(is_4xx) as 4xx sum(is_5xx) as 5xx
@@ -161,21 +143,9 @@
     <panel>
       <title>Error Rate Heatmap by Region</title>
       <map>
-        <search>
+        <search base="base_akamai">
           <query><![CDATA[
-            index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=country output=raw_country
-            | spath input=_raw path=statusCode output=raw_statusCode
-            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval country=coalesce(country, raw_country),
-                   status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
-            | eval is_4xx=if(status>=400 AND status<500,1,0),
-                   is_5xx=if(status>=500 AND status<600,1,0),
-                   is_no_response=if(status=0,1,0)
-            | fillnull value="-" country
-            | stats count as requests
+            stats count as requests
                     sum(is_4xx) as errors_4xx
                     sum(is_5xx) as errors_5xx
                     sum(is_no_response) as no_response
@@ -246,8 +216,6 @@
             | fields country_name error_rate
             | geom geo_countries featureIdField="country_name"
           ]]></query>
-          <earliest>$time_range.earliest$</earliest>
-          <latest>$time_range.latest$</latest>
         </search>
         <option name="mapping.type">choropleth</option>
         <option name="mapping.choroplethLayer.colorMode">auto</option>
@@ -268,22 +236,9 @@
     <panel>
       <title>Errors [4xx, 5xx] by Region</title>
       <table>
-        <search>
+        <search base="base_akamai">
           <query><![CDATA[
-            index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=country output=raw_country
-            | spath input=_raw path=statusCode output=raw_statusCode
-            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval country=coalesce(country, raw_country),
-                   status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
-            | fillnull value="-" country
-            | eval code=case(status>=400 AND status<600, status_code."s",
-                             status=0, "zznoresp",
-                             status>=200 AND status<400, "zzok",
-                             true(), "zzother")
-            | chart useother=f limit=0 count over country by code
+            chart useother=f limit=0 count over country by code
             | addtotals fieldname=requests
             | eval total_errors=requests-coalesce(zzok,0)-coalesce(zzother,0)
             | eval "error %"=round((total_errors/requests)*100,3)
@@ -293,8 +248,6 @@
             | head 20
             | table country requests "error %" *
           ]]></query>
-          <earliest>$time_range.earliest$</earliest>
-          <latest>$time_range.latest$</latest>
         </search>
         <option name="count">20</option>
         <option name="wrap">false</option>
@@ -335,22 +288,9 @@
     <panel>
       <title>Errors [4xx, 5xx] by Host</title>
       <table>
-        <search>
+        <search base="base_akamai">
           <query><![CDATA[
-            index="akamai_metrics_prod"
-            | spath input=_raw
-            | spath input=_raw path=reqHost output=raw_reqHost
-            | spath input=_raw path=statusCode output=raw_statusCode
-            | rex field=_raw "\"statusCode\":\"?(?<rex_statusCode>\d+)\"?"
-            | eval reqHost=coalesce(reqHost, raw_reqHost),
-                   status_code=coalesce(mvindex(statusCode,0), mvindex(raw_statusCode,0), rex_statusCode),
-                   status=tonumber(status_code)
-            | fillnull value="-" reqHost
-            | eval code=case(status>=400 AND status<600, status_code."s",
-                             status=0, "zznoresp",
-                             status>=200 AND status<400, "zzok",
-                             true(), "zzother")
-            | chart useother=f limit=0 count over reqHost by code
+            chart useother=f limit=0 count over reqHost by code
             | addtotals fieldname=requests
             | eval total_errors=requests-coalesce(zzok,0)-coalesce(zzother,0)
             | eval "error %"=round((total_errors/requests)*100,3)
@@ -360,8 +300,6 @@
             | head 20
             | table reqHost requests "error %" *
           ]]></query>
-          <earliest>$time_range.earliest$</earliest>
-          <latest>$time_range.latest$</latest>
         </search>
         <option name="count">20</option>
         <option name="wrap">false</option>
