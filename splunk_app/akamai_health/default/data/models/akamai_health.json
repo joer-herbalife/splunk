@@ -1,0 +1,153 @@
+{
+  "modelName": "akamai_health",
+  "displayName": "Akamai Health",
+  "description": "Akamai website health metrics for herbalife dashboards. Root event dataset over index=akamai_metrics_prod with status/host/country fields extracted from the JSON payload as accelerated calculated fields. Acceleration lets tstats read materialized summaries instead of scanning raw events.",
+  "objects": [
+    {
+      "objectName": "web_requests",
+      "displayName": "Web Requests",
+      "parentName": "BaseEvent",
+      "comment": "",
+      "fields": [
+        {
+          "fieldName": "_time",
+          "displayName": "_time",
+          "type": "timestamp",
+          "fieldSearch": "",
+          "owner": "BaseEvent",
+          "multivalue": false,
+          "hidden": false,
+          "editable": false,
+          "required": false,
+          "fieldType": "auto"
+        }
+      ],
+      "calculations": [
+        {
+          "calculationType": "eval",
+          "calculationID": "calc_reqHost",
+          "editable": true,
+          "comment": "",
+          "owner": "web_requests",
+          "outputFields": [
+            {
+              "fieldName": "reqHost",
+              "displayName": "reqHost",
+              "type": "string",
+              "fieldSearch": "",
+              "owner": "web_requests",
+              "multivalue": false,
+              "hidden": false,
+              "editable": true,
+              "required": false,
+              "fieldType": "eval"
+            }
+          ],
+          "expression": "coalesce(reqHost, spath(_raw, \"reqHost\"), \"-\")"
+        },
+        {
+          "calculationType": "eval",
+          "calculationID": "calc_country",
+          "editable": true,
+          "comment": "",
+          "owner": "web_requests",
+          "outputFields": [
+            {
+              "fieldName": "country",
+              "displayName": "country",
+              "type": "string",
+              "fieldSearch": "",
+              "owner": "web_requests",
+              "multivalue": false,
+              "hidden": false,
+              "editable": true,
+              "required": false,
+              "fieldType": "eval"
+            }
+          ],
+          "expression": "coalesce(country, spath(_raw, \"country\"), \"-\")"
+        },
+        {
+          "calculationType": "eval",
+          "calculationID": "calc_statusCode",
+          "editable": true,
+          "comment": "",
+          "owner": "web_requests",
+          "outputFields": [
+            {
+              "fieldName": "statusCode",
+              "displayName": "statusCode",
+              "type": "string",
+              "fieldSearch": "",
+              "owner": "web_requests",
+              "multivalue": false,
+              "hidden": false,
+              "editable": true,
+              "required": false,
+              "fieldType": "eval"
+            }
+          ],
+          "expression": "coalesce(mvindex(statusCode, 0), spath(_raw, \"statusCode\"))"
+        },
+        {
+          "calculationType": "eval",
+          "calculationID": "calc_status",
+          "editable": true,
+          "comment": "",
+          "owner": "web_requests",
+          "outputFields": [
+            {
+              "fieldName": "status",
+              "displayName": "status",
+              "type": "number",
+              "fieldSearch": "",
+              "owner": "web_requests",
+              "multivalue": false,
+              "hidden": false,
+              "editable": true,
+              "required": false,
+              "fieldType": "eval"
+            }
+          ],
+          "expression": "tonumber(statusCode)"
+        },
+        {
+          "calculationType": "eval",
+          "calculationID": "calc_status_class",
+          "editable": true,
+          "comment": "",
+          "owner": "web_requests",
+          "outputFields": [
+            {
+              "fieldName": "status_class",
+              "displayName": "status_class",
+              "type": "string",
+              "fieldSearch": "",
+              "owner": "web_requests",
+              "multivalue": false,
+              "hidden": false,
+              "editable": true,
+              "required": false,
+              "fieldType": "eval"
+            }
+          ],
+          "expression": "case(status=0, \"no_response\", status>=200 AND status<300, \"2xx\", status>=300 AND status<400, \"3xx\", status>=400 AND status<500, \"4xx\", status>=500 AND status<600, \"5xx\", true(), \"unknown\")"
+        }
+      ],
+      "constraints": [
+        {
+          "search": "index=akamai_metrics_prod",
+          "owner": "web_requests",
+          "comment": "",
+          "editable": true
+        }
+      ],
+      "lineage": "web_requests"
+    }
+  ],
+  "objectSummary": {
+    "Event-Based": 1,
+    "Transaction-Based": 0,
+    "Search-Based": 0
+  }
+}

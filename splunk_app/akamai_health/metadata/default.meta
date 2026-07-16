@@ -1,0 +1,9 @@
+# App-scoped sharing for every knowledge object in this app (dashboard, data model,
+# lookup definition, lookup table). All users can read (view the dashboard); only
+# admins can edit. A single global [] stanza avoids per-conf metadata stanzas that
+# would otherwise require reload triggers in app.conf.
+#
+# To let ad hoc searches in OTHER apps use this data model/lookup, add a per-object
+# stanza with `export = system` (and the matching reload trigger in app.conf).
+[]
+access = read : [ * ], write : [ admin, sc_admin ]
