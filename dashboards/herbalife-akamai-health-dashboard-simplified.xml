@@ -13,16 +13,7 @@
   </fieldset>
 
   <!--
-    Shared base search: reads the index and extracts the required fields ONCE.
-    All panels below run as post-process searches against this (base="base_akamai"),
-    so raw events are scanned and parsed a single time per dashboard load instead of
-    once per panel. Uses targeted rex (3 fields) instead of spath input=_raw (full
-    JSON parse) for a large reduction in per-event cost.
-
-    Note: this base is non-transforming, so post-processing is capped at the
-    dispatch maxout limit (default 500k events). For very wide time ranges / high
-    volume, promote status_code/country/reqHost to indexed fields and use tstats,
-    or add a transforming summary. See option (B) in the review.
+    Deprecated base search / dashboard.  See: Accelerated
   -->
   <search id="base_akamai">
     <query><![CDATA[
@@ -110,14 +101,6 @@
     <panel>
       <title>Total Requests by 4xx &amp; 5xx Over Time</title>
       <chart>
-        <!--
-          Dedicated search (NOT the shared base). timechart must cover the full
-          time range, but a non-transforming base is capped at the dispatch maxout
-          limit (most-recent-first), which truncates older buckets and makes the
-          chart appear to ignore the time range. Running timechart directly against
-          the index is transforming, so it aggregates the whole range with no event
-          cap. Kept cheap via a single targeted rex (only statusCode is needed).
-        -->
         <search>
           <query><![CDATA[
             index="akamai_metrics_prod"
