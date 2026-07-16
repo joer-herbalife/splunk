@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "2.0.0",
+  "info": {
+    "title": "Akamai Health",
+    "id": {
+      "group": null,
+      "name": "akamai_health",
+      "version": "1.0.0"
+    },
+    "author": [
+      {
+        "name": "Herbalife",
+        "email": null,
+        "company": null
+      }
+    ],
+    "releaseDate": null,
+    "description": "Accelerated Akamai website health dashboard (data model + tstats). Backs the accelerated health view.",
+    "classification": {
+      "intendedAudience": null,
+      "categories": [],
+      "developerLicense": null
+    },
+    "commonInformationModels": null,
+    "license": {
+      "name": null,
+      "text": null,
+      "uri": null
+    },
+    "privacyPolicy": {
+      "name": null,
+      "text": null,
+      "uri": null
+    },
+    "releaseNotes": {
+      "name": null,
+      "text": null,
+      "uri": null
+    }
+  },
+  "dependencies": null,
+  "tasks": null,
+  "inputGroups": null,
+  "incompatibleApps": null,
+  "platformRequirements": null
+}
