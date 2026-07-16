@@ -87,7 +87,53 @@ surfacing regional problems that a global average would hide.
 Most tables require at least 20 requests per row (10 for regional skew) so that low-volume noise doesn't
 dominate the rankings, and are capped at the top 50 rows.
 
-## Herbalife Akamai Website Health (Top 20)
+## Herbalife Akamai Website Health (Accelerated)
+
+The current error-focused view: availability, error rate, regional impact, and a 4xx/5xx breakdown for
+hosts and regions — backed by an accelerated data model so it renders fast over the full selected time
+range. **This supersedes the deprecated Top 20 dashboard below.**
+
+- **Splunk:** https://hrbl.splunkcloud.com/en-US/app/search/herbalife_akamai_website_health_simplified
+- **Source:** [`dashboards/herbalife-akamai-health-dashboard-accelerated.xml`](dashboards/herbalife-akamai-health-dashboard-accelerated.xml)
+- **Data model:** `akamai_health` (must be accelerated — setup in [`splunk_app/akamai_health/MANUAL_SETUP.md`](splunk_app/akamai_health/MANUAL_SETUP.md))
+- **Index:** `akamai_metrics_prod`
+
+### How it works
+
+Instead of parsing raw JSON on every load, the panels read a pre-built summary via `tstats` against the
+`akamai_health` data model. The model extracts `reqHost`, `country`, and `statusCode` from each event once
+(at summary-build time) and derives `status_class` (`2xx`/`3xx`/`4xx`/`5xx`/`no_response`/`unknown`). This
+removes the per-panel raw-event scan and the post-process result cap, so every panel aggregates the entire
+selected range quickly.
+
+Because it reads an accelerated summary:
+
+- **It is not real-time.** Use relative/preset time ranges — a Real-time selection errors, since `tstats`
+  is unsupported in real-time search. Data is typically current to within a minute or two (5-minute
+  summary rebuild, plus a raw scan of the not-yet-summarized tail).
+- **Acceleration must be enabled** on the data model (7-day summary range by default). Until the summary is
+  built, `tstats` falls back to slow raw scans. The map uses the `country_iso_to_name` lookup to turn ISO
+  codes into names for the `geom` overlay.
+
+### Inputs
+
+| Input | Default | Notes |
+|---|---|---|
+| Time Range | Last 10 hours | The only input. Do **not** pick a Real-time range — `tstats` does not support it |
+
+### Panels
+
+The same error-focused panels as the deprecated Top 20 dashboard — Availability / Server Error Rate (5xx) /
+Client Error Rate (4xx) tiles, Total Requests by 4xx & 5xx over time, Error Rate Heatmap by Region, and
+Errors by Region / by Host tables with per-status-code drilldowns — but every panel is driven by the
+accelerated `akamai_health` data model rather than its own raw search, and each honors the selected time
+range.
+
+## Herbalife Akamai Website Health (Top 20) — DEPRECATED
+
+> **Deprecated.** Superseded by the [Accelerated dashboard](#herbalife-akamai-website-health-accelerated)
+> above, which has the same panels but reads an accelerated data model (faster, full-range accurate). Kept
+> here for reference only; not recommended for new use.
 
 An error-focused, stripped-down companion to the full dashboard: availability, error rate, regional
 impact, and a 4xx/5xx breakdown for the top 20 hosts and regions. Use it for a fast read on "is anything
